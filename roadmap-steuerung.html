@@ -484,7 +484,7 @@ nav.tabs .tspace{flex:1;min-width:20px}
     <label>Steering-Text (erscheint auf Folien, kurz)<input id="fSteer" maxlength="110"></label>
     <label>Interner Kommentar (nie auf Folien)<textarea id="fComment" rows="3"></textarea></label>
     <label>Epic-Referenzen<input id="fEpics" placeholder="z. B. IAM-123, IAM-130"></label>
-    <label>Zusätzliches Jira-Label <span>(optional – z. B. für bestehende Tickets; die ID oben ist immer Label)</span><input id="fJira" placeholder="ini480-…"></label>
+    <div id="fJiraLinksTop" class="small" style="margin:-6px 0 10px"></div><label id="fJiraL">Altes Jira-Label <span>(wird nicht mehr verwendet – Tickets bitte auf die ID umlabeln; Feld leeren zum Entfernen)</span><input id="fJira"></label>
     <div style="margin:-4px 0 10px"><button type="button" id="fJiraSug" hidden>Vorschlag</button> <span id="fJiraLinks"></span></div>
     <label>Abhängig von Meilensteinen (Strg+Klick für mehrere)<select id="fDep" multiple size="5"></select></label>
     <label>Änderungsgrund <span>(Pflicht bei Termin- oder Inhaltsänderung)</span><input id="fReason"></label>
@@ -562,7 +562,8 @@ function ensureKeys(d){const ord=new Map((d.areas||[]).map((a,i)=>[a.id,i])),see
   L.filter(m=>m.key).forEach(m=>{if(seen.has(m.key)){fixed.push(m);m.key=''}else seen.add(m.key)});
   L.filter(m=>!m.key).forEach(m=>{m.key=nextMsKey(d,m.areaId,[...seen]);seen.add(m.key)});return fixed}
 const msLbl=m=>m&&m.key?m.key+' · '+m.title:(m?m.title:'');
-const msLabels=m=>[...new Set([m.key,m.jiraLabel].filter(Boolean))];
+const msLabels=m=>m&&m.key?[m.key]:[];
+const krLabels=k=>k.jiraLabel?[k.jiraLabel]:(k.msIds||[]).map(id=>(S.milestones.find(m=>m.id===id)||{}).key).filter(Boolean);
 function upgradeData(d){if(!d||!d.meta)return{d};let v=+(d.meta.schema||1);if(v>APP_SCHEMA)return{d,newer:v};const from=v;while(v<APP_SCHEMA){(MIGR[v]||(()=>{}))(d);v++}d.meta.schema=APP_SCHEMA;return{d,from}}
 function renderRo(){const b=document.getElementById('roBanner');if(!b)return;b.hidden=!roMode;const sv=document.getElementById('bSave');if(sv)sv.hidden=!!roMode;if(roMode)b.innerHTML=`🔒 <b>Nur lesen:</b> Diese Datei wurde mit einer neueren Version (Schema ${roMode.v}) gespeichert, diese Anwendung kennt Schema ${APP_SCHEMA}. Bitte die aktuelle <code>roadmap-steuerung.html</code> verwenden – sonst könnten Daten verloren gehen.`}
 const isAdmin=()=>!roMode&&!!me&&me.role==='admin';
@@ -623,6 +624,15 @@ function afterSave(d,txt,seq0,auto){
   if(!auto)toast((dirty?'Gespeichert, weitere Änderungen offen – Rev. ':'Gespeichert – Rev. ')+S.meta.revision);
   render();if(dirty)scheduleAuto();
 }
+function permHelp(ex){const mac=/Mac/.test(navigator.platform||navigator.userAgent),br=/Edg\//.test(navigator.userAgent)?'Edge':/Chrome\//.test(navigator.userAgent)?'Chrome':'ein anderer Browser';
+  dlg('Keine Schreibberechtigung',`<p>Der Browser hat das Speichern in <b>${esc(fileName||'die Datei')}</b> nicht erlaubt.</p>
+   <p><b>Häufige Ursachen</b></p><ul>
+   <li>Die Abfrage „Änderungen speichern?“ wurde abgelehnt, weggeklickt oder ist hinter dem Fenster verschwunden.</li>
+   <li>Die Datei liegt in einem Ordner, den ${br} aus Sicherheitsgründen sperrt${mac?' – auf dem Mac alles unter <code>~/Library</code>, also auch OneDrive/SharePoint- und iCloud-Ordner unter <code>~/Library/CloudStorage</code> bzw. <code>Mobile Documents</code>':' – z. B. Systemordner oder AppData'}. Lösung: Datei in einen normalen Ordner legen (z. B. Dokumente) oder über die Synchronisierung im Finder-Pfad öffnen.</li>
+   <li>Die Datei ist schreibgeschützt${mac?' (Finder → Rechtsklick → Informationen: „Geschützt“ oder Zugriffsrechte „Nur lesen“)':''}.</li>
+   <li>${br==='ein anderer Browser'?'<b>Safari und Firefox können nicht direkt in Dateien speichern – bitte Edge oder Chrome verwenden.</b>':'Die Datei wurde über „Einzelne Datei öffnen“ geöffnet – „Ordner der Roadmap öffnen“ fragt die Berechtigung einmal für den ganzen Ordner ab.'}</li></ul>
+   ${ex?`<p class="small muted">Technische Meldung: ${esc(ex)}</p>`:''}`,
+   [{l:'Schließen',f:dlgClose},'spacer',{l:'Speichern unter …',f:()=>{dlgClose();doSave(true)}},{l:'Erlauben und speichern',c:'primary',f:async()=>{let r='denied';try{r=await fileHandle.requestPermission({mode:'readwrite'})}catch(e){derr(e.name+': '+e.message);return}if(r==='granted'){dlgClose();doSave(false)}else derr('Weiterhin nicht erlaubt – „Speichern unter …“ nutzen oder Datei verschieben (siehe oben).')}}])}
 async function doSave(as,auto){
   if(roMode){toast('Nur lesen – diese Datei stammt aus einer neueren Programmversion.');return}
   if(!S||saving)return;saving=true;const seq0=hist.seq;
@@ -636,7 +646,8 @@ async function doSave(as,auto){
     }
     if((await fileHandle.queryPermission({mode:'readwrite'}))!=='granted'){
       if(auto){autoPaused=true;renderHeader();return}
-      if((await fileHandle.requestPermission({mode:'readwrite'}))!=='granted'){toast('Keine Schreibberechtigung für die Datei.');return}
+      let r='denied',ex='';try{r=await fileHandle.requestPermission({mode:'readwrite'})}catch(e){ex=e.name+': '+e.message}
+      if(r!=='granted'){setTimeout(()=>permHelp(ex),0);return}
     }
     autoPaused=false;
     const raw=await (await fileHandle.getFile()).text(),disk0=JSON.parse(raw),dv=+((disk0.meta&&disk0.meta.schema)||1);
@@ -1341,7 +1352,7 @@ function renderOkr(){
       body+=`<div class="objc"><div class="objh"><span class="stripe" style="background:${a.color};height:30px"></span><div class="t">${esc(ob.title)}<div class="small muted" style="font-weight:400">${esc(a.name)} · ${fmtK(ob.from)} – ${fmtK(ob.to)}${ob.owner?' · Verantwortlich: '+esc(ob.owner):''} · zuletzt geändert von ${esc(ob.changedBy||'–')}${ob.changedAt?' am '+fmtTs(ob.changedAt):''}</div></div><div style="width:150px"><div class="pbar"><i style="width:${((avg||0)*100).toFixed(0)}%;background:${a.color}"></i></div><div class="small muted">${avg==null?'kein Fortschritt':Math.round(avg*100)+' % Ø Fortschritt'}</div></div>${ed?`<button data-okr="kr-new" data-id="${ob.id}">+ Key Result</button><button data-okr="obj" data-id="${ob.id}">Bearbeiten</button>`:''}<button data-okr="hist" data-id="${ob.id}">Verlauf</button></div>`;
       if(!krs.length)body+=`<div class="krr"><span class="muted">Noch keine Key Results.</span></div>`;
       krs.forEach((k,i)=>{const ev=evs[i],st=KRST[ev.status];
-        body+=`<div class="krr"><div><div>${esc(k.title)}</div><div class="small muted">${KPIT[k.kpiType]} · ${esc(targetTxt(k))}${k.owner?' · '+esc(k.owner):''}</div>${k.jiraLabel?`<div class="small" style="margin-top:2px">${jiraLinks(k.jiraLabel,[['all','Jira: alle'],['open','offen']])}</div>`:''}<div class="small muted">geändert von ${esc(k.changedBy||'–')}${k.changedAt?' am '+fmtTs(k.changedAt):''}</div></div><div>${krWidget(k,ev)}</div><div class="val">${esc(ev.txt)}</div><div>${badge(st)}<div class="small muted">${ev.manual?'gesetzt':'automatisch'}</div></div><div class="small muted">${ev.last?`${fmtK(ev.last.date)} · ${esc(ev.last.user)}`:'kein Messwert'}${spark(k,o.asOf)}</div><div class="nw">${ed?`<button data-okr="ci" data-id="${k.id}">Messwert</button> <button data-okr="kr" data-id="${k.id}" title="Key Result bearbeiten">✎</button> `:''}<button data-okr="krhist" data-id="${k.id}">Verlauf</button></div></div>`});
+        body+=`<div class="krr"><div><div>${esc(k.title)}</div><div class="small muted">${KPIT[k.kpiType]} · ${esc(targetTxt(k))}${k.owner?' · '+esc(k.owner):''}</div>${krLabels(k).length?`<div class="small" style="margin-top:2px">${jiraLinks(krLabels(k),[['all','Jira: alle'],['open','offen']])}</div>`:''}<div class="small muted">geändert von ${esc(k.changedBy||'–')}${k.changedAt?' am '+fmtTs(k.changedAt):''}</div></div><div>${krWidget(k,ev)}</div><div class="val">${esc(ev.txt)}</div><div>${badge(st)}<div class="small muted">${ev.manual?'gesetzt':'automatisch'}</div></div><div class="small muted">${ev.last?`${fmtK(ev.last.date)} · ${esc(ev.last.user)}`:'kein Messwert'}${spark(k,o.asOf)}</div><div class="nw">${ed?`<button data-okr="ci" data-id="${k.id}">Messwert</button> <button data-okr="kr" data-id="${k.id}" title="Key Result bearbeiten">✎</button> `:''}<button data-okr="krhist" data-id="${k.id}">Verlauf</button></div></div>`});
       body+='</div>';
     }
   }
@@ -1412,8 +1423,8 @@ function editKr(id,objId){
    <div class="two" data-t="range"><label>Minimum (leer = keins)<input id="p_min" value="${esc(String(v.min??'').replace('.',','))}"></label><label>Maximum (leer = keins)<input id="p_max" value="${esc(String(v.max??'').replace('.',','))}"></label></div>
    <label data-t="number range">Einheit<input id="p_unit" value="${esc(v.kpiType==='percent'?'':v.unit||'')}" placeholder="z. B. Systeme, Tage, Std, €"></label>
    <label data-t="level">Anzahl Stufen<input id="p_scale" value="${esc(v.scaleMax||'5')}"></label>
-   <div data-t="milestone"><div class="small muted" style="margin-bottom:4px">Verknüpfte Meilensteine</div>${ms.map(m=>`<label class="chk"><input type="checkbox" class="p_ms" value="${m.id}" ${(v.msIds||[]).includes(m.id)?'checked':''}> ${esc(msLbl(m))} <span class="muted">(${span(m)})</span></label><br>`).join('')||'<p class="muted">Keine Meilensteine im Stream.</p>'}</div>
-   <label>Jira-Label (optional)<input id="p_jira" value="${esc(v.jiraLabel||'')}" placeholder="${esc(S.meta.jira.prefix)}…"></label><div style="margin:-4px 0 10px"><button type="button" id="p_jsug">Vorschlag</button> <span id="p_jlinks"></span></div>
+   <div><div class="small muted" style="margin-bottom:4px">Verknüpfte Meilensteine <span data-t="milestone">(Pflicht – daraus wird der Fortschritt berechnet)</span><span data-t="percent number range boolean level">(optional – Jira-Bezug über die Meilenstein-IDs)</span></div>${ms.map(m=>`<label class="chk"><input type="checkbox" class="p_ms" value="${m.id}" ${(v.msIds||[]).includes(m.id)?'checked':''}> ${esc(msLbl(m))} <span class="muted">(${span(m)})</span></label><br>`).join('')||'<p class="muted">Keine Meilensteine im Stream.</p>'}</div>
+   <label>Eigenes Jira-Label <span class="muted">(optional – ohne Eintrag gelten die IDs der verknüpften Meilensteine)</span><input id="p_jira" value="${esc(v.jiraLabel||'')}" placeholder="${esc(S.meta.jira.prefix)}…"></label><div style="margin:-4px 0 10px"><span id="p_jlinks"></span></div>
    <label>Verantwortlich<input id="p_owner" value="${esc(v.owner||'')}"></label>
    <label>Änderungsgrund (Pflicht bei Zieländerung)<input id="p_reason"></label>
    <p class="err" id="p_err"></p>${k?histHtml(k.id):''}`,
@@ -1421,7 +1432,7 @@ function editKr(id,objId){
   const hints={percent:'Fortschritt = (Ist − Start) / (Ziel − Start). Werte 0–100 %.',number:'Zahlenwert mit Einheit. Ziel kleiner als Start bedeutet „weniger ist besser“ (z. B. Laufzeit, Durchlaufzeit).',range:'Erfüllt, solange der Messwert im Korridor liegt (z. B. Verfügbarkeit ≥ 99,5, überfällige Reviews ≤ 50). Min oder Max darf leer sein.',boolean:'Messwert Ja/Nein, z. B. „Konzept abgenommen“.',level:'Stufen 1…n, z. B. Reifegrad nach eigener Skala. Ziel = Zielstufe.',milestone:'Fortschritt wird aus dem Status der verknüpften Meilensteine berechnet. Messwert nicht nötig, Status und Kommentar trotzdem möglich.'};
   const upd=()=>{const t=$('#p_type').value;document.querySelectorAll('#pBody [data-t]').forEach(e=>e.style.display=e.dataset.t.split(' ').includes(t)?'':'none');$('#p_typehint').textContent=hints[t]};
   $('#p_type').onchange=upd;upd();
-  const uj=()=>{$('#p_jlinks').innerHTML=jiraLinks($('#p_jira').value.trim(),[['all','Alle'],['done','Erledigt'],['open','Offen']])};$('#p_jira').oninput=uj;$('#p_jsug').onclick=()=>{const ob=S.objectives.find(o=>o.id===$('#p_obj').value);$('#p_jira').value=labelSuggest(ob&&ob.areaId,$('#p_title').value);uj()};uj();
+  const uj=()=>{const L=krLabels({jiraLabel:$('#p_jira').value.trim(),msIds:[...document.querySelectorAll('#pBody .p_ms:checked')].map(i=>i.value)});$('#p_jlinks').innerHTML=L.length?jiraLinks(L,[['all','Alle'],['done','Erledigt'],['open','Offen']]):'<span class="small muted">Kein Jira-Bezug – Meilensteine verknüpfen oder eigenes Label eintragen.</span>'};$('#p_jira').oninput=uj;$('#pBody').addEventListener('change',e=>{if(e.target.classList.contains('p_ms'))uj()});uj();
 }
 function saveKr(id){
   const k=id?S.krs.find(x=>x.id===id):null,dot=s=>s.replace(',','.');
@@ -1460,11 +1471,11 @@ function editCi(krId){
   else if(k.kpiType==='milestone')inp=`<p class="hint">Wert kommt aus den Meilensteinen: ${esc(ev.txt)}. Hier Status und Kommentar erfassen.</p><input type="hidden" id="p_val" value="${ev.val??''}">`;
   else if(k.kpiType==='level')inp=`<label>Stufe (1–${esc(k.scaleMax||5)})<input id="p_val" type="number" min="1" max="${esc(k.scaleMax||5)}" value="${ev.val??''}"></label>`;
   else inp=`<label>Messwert ${k.kpiType==='percent'?'(%)':k.unit?'('+esc(k.unit)+')':''}<input id="p_val" value="${ev.val!=null?String(ev.val).replace('.',','):''}"></label>`;
-  openPanel('Messwert & Status erfassen',`<p><b>${esc(k.title)}</b><br><span class="muted small">${KPIT[k.kpiType]} · ${esc(targetTxt(k))}</span></p>${k.jiraLabel?`<p class="small">Zahlen aus Jira ablesen: ${jiraLinks(k.jiraLabel,[['all','Alle'],['done','Erledigt'],['open','Offen']])}</p>`:''}
+  openPanel('Messwert & Status erfassen',`<p><b>${esc(k.title)}</b><br><span class="muted small">${KPIT[k.kpiType]} · ${esc(targetTxt(k))}</span></p>${krLabels(k).length?`<p class="small">Zahlen aus Jira ablesen: ${jiraLinks(krLabels(k),[['all','Alle'],['done','Erledigt'],['open','Offen']])}</p>`:''}
    <div class="two"><label>Messdatum<input type="date" id="p_date" value="${d}"></label><label>Kalenderwoche<input id="p_kw" value="KW ${kw(d)}" disabled></label></div>
    ${inp}
    <label>Status<select id="p_st"><option value="auto">Automatisch aus Fortschritt vs. Zeitverlauf</option>${Object.entries(KRST).map(([a,b])=>`<option value="${a}">${b.l}</option>`).join('')}</select></label>
-   <label>Kommentar<textarea id="p_cmt" rows="3">${k.jiraLabel?esc(`Quelle: Jira-Label ${k.jiraLabel}, Stand KW${kw(d)}`):''}</textarea></label>
+   <label>Kommentar<textarea id="p_cmt" rows="3">${krLabels(k).length?esc(`Quelle: Jira-Label ${krLabels(k).join(', ')}, Stand KW${kw(d)}`):''}</textarea></label>
    <p class="err" id="p_err"></p>
    <h4>Bisherige Messwerte</h4>${ciTable(k)}`,
    ['spacer',{l:'Abbrechen',f:closePanel},{l:'Speichern',c:'primary',f:()=>saveCi(krId)}]);
@@ -1659,7 +1670,7 @@ function openDay(date,aid){
     return `<div class="opt"><span class="bd ${d.kind==='Eskalation'?'k-Gelöscht':'blue'}">${d.kind}</span> <b>${esc(d.title)}</b> ${badge(DECST[d.status]||DECST.draft)}<div class="small muted">${esc(areaName(d.areaId))} · ${why}</div>${c.decidedAt?`<div class="small">Entschieden ${fmtK(c.decidedAt)} durch ${esc(c.decidedBy)}${c.option?' · Option '+esc(c.option):''}${c.result?': '+esc(c.result):''}</div>`:d.recOption?`<div class="small">Empfehlung: Option ${esc(d.recOption)}${d.recommendation?' – '+esc(d.recommendation):''}</div>`:''}<button data-dayd="${d.id}" style="margin-top:6px">Vorlage öffnen</button> <button data-days="${d.id}" style="margin-top:6px">Als Folie</button></div>`}).join(''):'<p class="muted">Keine an diesem Tag.</p>');
   const krs=S.krs.filter(k=>areas.includes(krArea(k)));
   h+=`<h4>OKR / KPI – Stand am ${fmtK(date)}</h4>`+(krs.length?`<table class="tbl"><tr><th>Key Result</th><th>Wert</th><th>Status</th><th>Messung</th></tr>${krs.map(k=>{const ev=krEval(k,date),same=ev.last&&ev.last.date===date;return `<tr${same?' style="background:#f0f9ff"':''}><td>${esc(k.title)}<div class="small muted">${esc(targetTxt(k))}</div>${k.jiraLabel?jiraLinks(k.jiraLabel,[['all','Jira']]):''}</td><td class="nw">${esc(ev.txt)}</td><td>${badge(KRST[ev.status])}</td><td class="small nw">${ev.last?fmtK(ev.last.date)+(same?' ●':''):'–'}</td></tr>`}).join('')}</table><p class="hint">● an diesem Tag gemessen. Sonst gilt der letzte Messwert bis zu diesem Datum.</p>`:'<p class="muted">Keine Key Results.</p>');
-  h+=`<h4>Meilensteine in KW ${kw(date)} (${fmt(wkS)}–${fmt(wkE)})</h4>`+(ms.length?ms.map(m=>`<div class="small" style="padding:2px 0"><span class="dot" style="display:inline-block;background:${STATUS[m.status].c}"></span> ${esc(m.title)} <span class="muted">(${span(m)}, ${STATUS[m.status].l})</span> ${m.jiraLabel?jiraLinks(m.jiraLabel,[['open','offene Tickets']]):''}</div>`).join(''):'<p class="muted">Keine.</p>');
+  h+=`<h4>Meilensteine in KW ${kw(date)} (${fmt(wkS)}–${fmt(wkE)})</h4>`+(ms.length?ms.map(m=>`<div class="small" style="padding:2px 0"><span class="dot" style="display:inline-block;background:${STATUS[m.status].c}"></span> ${m.key?`<span class="mkey">${esc(m.key)}</span> · `:''}${esc(m.title)} <span class="muted">(${span(m)}, ${STATUS[m.status].l})</span> ${msLabels(m).length?jiraLinks(msLabels(m),[['open','offene Tickets']]):''}</div>`).join(''):'<p class="muted">Keine.</p>');
   const abl=S.people.filter(p=>visP(p)&&(aid?(p.areaIds.includes(aid)||p.project):true)&&absentOn(p.id,wkS,wkE)).map(p=>`<div class="small" style="padding:2px 0">${p.key?'⚠ ':''}${esc(p.name)} <span class="muted">(${esc(p.role||'')}${p.project?', Initiative':''}) · ${S.absences.filter(y=>y.personId===p.id&&y.from<=wkE&&y.to>=wkS).map(y=>fmt(y.from)+'–'+fmt(y.to)).join(', ')}</span></div>`);
   h+=`<h4>Abwesend in KW ${kw(date)}</h4>`+(abl.join('')||'<p class="muted">Niemand eingetragen.</p>');
   openPanel('Tagesansicht '+fmtK(date),h,[{l:'OKR-Dashboard zu diesem Datum',f:()=>{Object.assign(ui.okr,{asOf:date,asOfFix:date!==todayS(),area:aid||''});closePanel();ui.view='okr';render()}},'spacer',{l:'Schließen',f:closePanel}]);
@@ -2366,7 +2377,7 @@ function jiraLinks(label,modes){
   if(!label||!label.length)return '';const b=S.meta.jira.baseUrl,first=[].concat(label)[0];
   return (b?modes.map(([m,t])=>`<a class="bd jira" href="${esc(jiraUrl(label,m))}" target="_blank" rel="noopener" title="${esc(jqlFor(label,m))}">${t}</a>`).join(' '):'')+` <button type="button" class="jcopy" data-copy="${esc(first)}" title="Label kopieren">Label</button> <button type="button" class="jcopy" data-copy="${esc(jqlFor(label,''))}" title="JQL kopieren">JQL</button>`+(b?'':' <span class="small muted">Für Links Jira-URL in der Verwaltung eintragen</span>');
 }
-function updJiraLinks(){const k=$('#fKey').dataset.key||'',x=$('#fJira').value.trim(),L=[...new Set([k,x].filter(Boolean))];$('#fJiraLinks').innerHTML=jiraLinks(L,[['all','Alle Tickets'],['open','Offene']])}
+function updJiraLinks(){const k=$('#fKey').dataset.key||'';$('#fJiraLinksTop').innerHTML=k?'Jira zur ID: '+jiraLinks(k,[['all','Alle Tickets'],['open','Offene']]):'';$('#fJiraLinks').innerHTML='';$('#fJiraL').hidden=!$('#fJira').value.trim()&&!(ui.editId&&(S.milestones.find(m=>m.id===ui.editId)||{}).jiraLabel)}
 $('#fJira').addEventListener('input',updJiraLinks);
 $('#fJiraSug').onclick=()=>{$('#fJira').value=labelSuggest($('#fArea').value,$('#fTitle').value);updJiraLinks()};
 document.addEventListener('click',async e=>{const b=e.target.closest('.jcopy');if(!b)return;e.preventDefault();e.stopPropagation();const t=b.dataset.copy;
@@ -2376,7 +2387,7 @@ document.addEventListener('click',async e=>{const b=e.target.closest('.jcopy');i
 const baseExample5=makeExample;
 makeExample=function(){
   const d=baseExample5();d.meta.jira={baseUrl:'',prefix:'ini480-',projects:''};
-  const L={m9:'ini480-pam-welle-1'};
+  const L={};
   d.milestones.forEach(m=>{if(L[m.id])m.jiraLabel=L[m.id]});
   d.areas.forEach(a=>{a.code={a1:'iiq',a2:'rezert',a3:'pam',a4:'compl',a5:'self'}[a.id]});
   d.krs.forEach(k=>{if(k.id==='k7')k.jiraLabel='ini480-pam-welle-1';if(k.id==='k12')k.jiraLabel='ini480-self-anforderungen'});
