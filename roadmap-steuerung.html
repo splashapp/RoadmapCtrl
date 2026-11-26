@@ -136,7 +136,7 @@ table.tbl{border-collapse:collapse;width:100%;background:#fff;margin-bottom:10px
 #panel{position:fixed;top:0;right:0;bottom:0;width:580px;max-width:100%;background:var(--panel);border-left:1px solid var(--line);box-shadow:-8px 0 24px rgba(0,0,0,.08);transform:translateX(105%);transition:transform .18s;z-index:61;display:flex;flex-direction:column}
 #panel.on{transform:none}
 #panel .db h4{margin:16px 0 6px;font-size:13px}
-#dlg{z-index:80;background:rgba(15,23,42,.35)}#dlg .modal{width:560px}#dlg .modal label{margin:8px 0}
+#dlg{z-index:120;background:rgba(15,23,42,.35)}#dlg .modal{width:560px}#dlg .modal label{margin:8px 0}
 .acttbl td{font-size:12.5px}.acttbl tr.ac{cursor:pointer}.acttbl tr.ac:hover td{background:#f8fafc}
 #pBody label.chk{display:inline-flex;flex-direction:row;align-items:center;gap:5px;margin:2px 12px 2px 0;color:var(--text);font-size:12.5px}
 .kwt{color:var(--muted);font-size:11.5px;font-weight:400}
@@ -593,8 +593,21 @@ function load(d,h,name,keepUser,keepHist){
   return true;
 }
 
+let fsBlocked=false;const isBlockErr=e=>e&&(e.name==='NotAllowedError'||e.name==='SecurityError');
+function openViaInput(){const i=document.createElement('input');i.type='file';i.accept='.json,application/json';
+  i.onchange=async()=>{const f=i.files[0];if(!f)return;try{load(JSON.parse(await f.text()),null,f.name);toast('Geöffnet im Download-Modus: „Speichern“ lädt eine neue Datei herunter.')}catch(e){alert('Datei konnte nicht geladen werden: '+e.message)}};i.click()}
+function fsHelp(e,what){fsBlocked=true;const br=/Edg\//.test(navigator.userAgent)?'edge':'chrome',mac=/Mac/.test(navigator.platform||navigator.userAgent);
+  dlg('Dateizugriff vom Browser gesperrt',`<p>Der Browser hat ${what||'den Zugriff auf Dateien'} abgelehnt (<code>${esc(e.name)}</code>). Das Tool kann so weder Ordner öffnen noch direkt in die Datei speichern.</p>
+   <p><b>Wahrscheinlichste Ursache: eine Unternehmensrichtlinie.</b> Viele verwaltete Browser sperren den direkten Dateizugriff von Webseiten.</p>
+   <p><b>Prüfen (1 Minute):</b></p><ol>
+   <li><code>${br}://policy</code> in die Adresszeile kopieren und nach <code>FileSystem</code> suchen. Steht dort z. B. <code>DefaultFileSystemWriteGuardSetting = 2</code>, <code>DefaultFileSystemReadGuardSetting = 2</code> oder <code>FileSystemWriteBlockedForUrls</code>, ist es die Richtlinie → nur die IT kann das freigeben (z. B. per <code>FileSystemWriteAskForUrls</code> / <code>FileSystemReadAskForUrls</code> für den Speicherort der HTML).</li>
+   <li>Sonst <code>${br}://settings/content/fileEditing</code> öffnen und „Websites dürfen fragen …“ erlauben; Einträge unter „Nicht zulässig“ entfernen.</li>
+   ${mac?'<li>Liegt der Ordner unter <code>~/Library</code> (OneDrive/SharePoint, iCloud), sperrt der Browser ihn ebenfalls – Ordner nach „Dokumente“ verschieben.</li>':''}</ol>
+   <p><b>Bis dahin:</b> Im <b>Download-Modus</b> weiterarbeiten – Datei normal öffnen, „Speichern“ lädt eine neue Datei herunter, die du selbst zurück in den Ordner legst. Für mehrere Personen gleichzeitig ist das nicht geeignet (keine Anwesenheit, keine Zusammenführung).</p>`,
+   [{l:'Schließen',f:dlgClose},'spacer',{l:'Im Download-Modus öffnen …',c:'primary',f:()=>{dlgClose();openViaInput()}}])}
 async function openFile(){
   if(dirty&&!confirm('Ungespeicherte Änderungen verwerfen?'))return;
+  if(fsBlocked)return openViaInput();
   try{
     if(window.showOpenFilePicker){
       const[h]=await showOpenFilePicker({types:[{description:'Roadmap',accept:{'application/json':['.json']}}]});
@@ -603,7 +616,7 @@ async function openFile(){
       const i=document.createElement('input');i.type='file';i.accept='.json,application/json';
       i.onchange=async()=>{const f=i.files[0];if(f)load(JSON.parse(await f.text()),null,f.name)};i.click();
     }
-  }catch(e){if(e.name!=='AbortError')alert('Datei konnte nicht geladen werden: '+e.message)}
+  }catch(e){if(isBlockErr(e))fsHelp(e,'das Öffnen der Datei');else if(e.name!=='AbortError')alert('Datei konnte nicht geladen werden: '+e.message)}
 }
 
 async function reloadFile(){
@@ -638,8 +651,8 @@ async function doSave(as,auto){
   if(!S||saving)return;saving=true;const seq0=hist.seq;
   try{
     if(as||!fileHandle){
-      if(window.showSaveFilePicker){
-        const h=await showSaveFilePicker({suggestedName:fileName||'roadmap.json',types:[{description:'Roadmap',accept:{'application/json':['.json']}}]});
+      if(window.showSaveFilePicker&&!fsBlocked){
+        let h;try{h=await showSaveFilePicker({suggestedName:fileName||'roadmap.json',types:[{description:'Roadmap',accept:{'application/json':['.json']}}]})}catch(e){if(isBlockErr(e)){fsBlocked=true;const d=finalize(S);download(new Blob([JSON.stringify(d,null,2)],{type:'application/json'}),fileName||'roadmap.json');afterSave(d,null,seq0,false);toast('Dateizugriff gesperrt – Datei wurde heruntergeladen.');return}throw e}
         fileHandle=h;fileName=h.name;await writeData(h,finalize(S),seq0,false);presRestore();
       }else{const d=finalize(S);download(new Blob([JSON.stringify(d,null,2)],{type:'application/json'}),fileName||'roadmap.json');afterSave(d,null,seq0,false)}
       return;
@@ -3120,10 +3133,11 @@ async function openFromDir(dir,pref){
   const h=await dir.getFileHandle(n),f=await h.getFile();if(!load(JSON.parse(await f.text()),h,f.name))return false;fileMod=f.lastModified;
   await presAttach(dir,true);idb.set('lastDir',{dir,name:n});return true}
 async function openDir(){if(dirty&&!confirm('Ungespeicherte Änderungen verwerfen?'))return;
-  if(!window.showDirectoryPicker){return openFile()}
-  try{const d=await showDirectoryPicker({id:'roadmap',mode:'readwrite'});await openFromDir(d)}catch(e){if(e.name!=='AbortError')alert('Ordner konnte nicht geöffnet werden: '+e.message)}}
+  if(!window.showDirectoryPicker||fsBlocked){return openFile()}
+  try{const d=await showDirectoryPicker({id:'roadmap',mode:'readwrite'});await openFromDir(d)}catch(e){if(isBlockErr(e))fsHelp(e,'das Öffnen des Ordners');else if(e.name!=='AbortError')alert('Ordner konnte nicht geöffnet werden: '+e.message)}}
 async function openLast(){const x=await idb.get('lastDir');if(!x)return openDir();
-  try{let p=await x.dir.queryPermission({mode:'readwrite'});if(p!=='granted')p=await x.dir.requestPermission({mode:'readwrite'});if(p!=='granted'){toast('Zugriff nicht erteilt.');return}await openFromDir(x.dir,x.name)}catch(e){alert('Der zuletzt genutzte Ordner ist nicht erreichbar ('+e.message+'). Bitte den Ordner neu wählen.');openDir()}}
+  try{let p=await x.dir.queryPermission({mode:'readwrite'});if(p!=='granted')p=await x.dir.requestPermission({mode:'readwrite'});if(p!=='granted'){toast('Zugriff nicht erteilt.');return}await openFromDir(x.dir,x.name)}catch(e){if(isBlockErr(e)&&e.message&&/not allowed by the user agent/i.test(e.message)){fsHelp(e,'den Zugriff auf den Ordner');return}
+    dlg('Ordner nicht erreichbar',`<p>Der zuletzt genutzte Ordner ist nicht erreichbar (${esc(e.message)}). Bitte den Ordner neu wählen.</p>`,[{l:'Schließen',f:dlgClose},'spacer',{l:'Ordner wählen …',c:'primary',f:()=>{dlgClose();openDir()}}])}}
 (async()=>{try{const x=await idb.get('lastDir');const b=document.getElementById('bLast');if(x&&b){b.textContent=`Weiterarbeiten: ${x.dir.name} / ${x.name}`;b.hidden=false;document.getElementById('bOpenDir').classList.remove('primary')}}catch(e){}})();
 document.getElementById('bLast').onclick=openLast;document.getElementById('bOpenDir').onclick=openDir;
 window.__rsOk=true;
